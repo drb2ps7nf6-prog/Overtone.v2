@@ -469,9 +469,12 @@ async function playCloudVoice(text, token){
   if(token!==speechQueueToken)return;
   const response=await fetch(OVERTON_API_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'tts',language:appLanguage,gender,text:chunk.trim(),speed:Math.min(1.15,Math.max(.75,.72+speed*.34))})});
   if(!response.ok)throw new Error('TTS HTTP '+response.status);
-  const data=await response.json();if(!data.audio)throw new Error('TTS audio URL missing');
+  const data=await response.json();if(!data.audio)throw new Error(data.error||'TTS audio missing');
   if(token!==speechQueueToken)return;
-  await new Promise((resolve,reject)=>{const audio=new Audio(data.audio);overtoneAudio=audio;audio.onended=resolve;audio.onerror=()=>reject(new Error('Audio playback failed'));audio.play().catch(reject)});
+  // Worker returns either a hosted audio URL or a data:audio/mpeg;base64 URI.
+  const audioSource=data.audio.startsWith('data:audio/')||/^https?:\/\//i.test(data.audio)
+    ? data.audio : 'data:audio/mpeg;base64,'+data.audio;
+  await new Promise((resolve,reject)=>{const audio=new Audio();overtoneAudio=audio;audio.preload='auto';audio.onended=()=>{if(overtoneAudio===audio)overtoneAudio=null;resolve()};audio.onerror=()=>reject(new Error('Audio playback failed'));audio.src=audioSource;const playResult=audio.play();if(playResult&&typeof playResult.catch==='function')playResult.catch(reject)});
  }
 }
 function speakOverton(text){
@@ -480,7 +483,7 @@ function speakOverton(text){
  if(overtoneAudio){overtoneAudio.pause();overtoneAudio=null}
  const token=++speechQueueToken;setOvertonState('speaking');
  const useCloud=!!(aiConsent&&OVERTON_API_ENDPOINT&&OVERTON_API_ENDPOINT!=='PASTE_YOUR_WORKER_URL_HERE');
- if(useCloud){playCloudVoice(text,token).then(()=>{if(token===speechQueueToken)setOvertonState('idle')}).catch(error=>{console.warn('Cloud TTS unavailable; using device speech:',error);if(token!==speechQueueToken)return;setVoiceHint(appLanguage==='ru'?'Облачный голос недоступен — использую голос устройства.':'Cloud voice unavailable — using device voice.');speakWithDeviceVoice(text,token)});return}
+ if(useCloud){playCloudVoice(text,token).then(()=>{if(token===speechQueueToken)setOvertonState('idle')}).catch(error=>{console.warn('Cloud TTS unavailable; using device speech:',error);if(token!==speechQueueToken)return;setVoiceHint(appLanguage==='ru'?'Не удалось получить облачный голос: '+(error?.message||'ошибка сервера')+'. Использую голос устройства.':'Cloud voice failed: '+(error?.message||'server error')+'. Using device voice.');speakWithDeviceVoice(text,token)});return}
  speakWithDeviceVoice(text,token);
 }
 function speakWithDeviceVoice(text,token){
